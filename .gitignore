@@ -1,0 +1,28 @@
+# Maven
+target/
+*.class
+*.jar
+*.war
+*.ear
+*.log
+.mvn/wrapper/maven-wrapper.properties
+
+# Node / Vite
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# IDEs
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Env
+.env
+.env.production
+.env.development
