@@ -43,7 +43,7 @@ const AIAssistant = ({ tasks, habits }) => {
     const habitContext = habits
       .map(h => `${h.name} (streak: ${h.currentStreak}d)`)
       .join(', ');
-    const contextStr = `Pending Tasks: [${taskContext}]. Habits: [${habitContext}].`;
+    const contextStr = `Current Date/Time: ${new Date().toLocaleString()}. Pending Tasks: [${taskContext}]. Habits: [${habitContext}].`;
 
     try {
       const result = await aiService.chat(textToSend, contextStr);

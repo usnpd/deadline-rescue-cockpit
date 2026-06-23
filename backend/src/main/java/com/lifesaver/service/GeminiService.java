@@ -20,20 +20,24 @@ import java.util.*;
 @Slf4j
 public class GeminiService {
 
+
     @Autowired
     private WebClient.Builder webClientBuilder;
 
     @Autowired
     private ObjectMapper objectMapper;
 
-    @Value("${gemini.api.key}")
-    private String apiKey;
-
-    @Value("${gemini.api.url}")
+    @Value("${ollama.api.url}")
     private String apiUrl;
 
-    private final Object apiLock = new Object();
-    private long lastCallTimestamp = 0;
+    @Value("${ollama.model}")
+    private String modelName;
+
+    @jakarta.annotation.PostConstruct
+    public void init() {
+        log.info("OllamaService initialized with model: {}", modelName);
+        log.info("Ollama API URL: {}", apiUrl);
+    }
 
     /**
      * Helper to clean markdown JSON wrappers from Gemini responses
@@ -53,96 +57,39 @@ public class GeminiService {
     }
 
     /**
-     * Generic method to call Gemini API
+     * Generic method to call Ollama API (keeping name callGemini to avoid refactoring callers)
      */
     private String callGemini(String prompt) {
-        synchronized (apiLock) {
-            long minIntervalMs = 4500; // Enforces max 13 requests per minute to stay safe below 15 RPM
-            long timeSinceLastCall = System.currentTimeMillis() - lastCallTimestamp;
-            if (timeSinceLastCall < minIntervalMs) {
-                long sleepTime = minIntervalMs - timeSinceLastCall;
-                log.info("Throttling: waiting {} ms to respect rate limits...", sleepTime);
-                try {
-                    Thread.sleep(sleepTime);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    throw new RuntimeException("Throttling interrupted", ie);
-                }
+        log.info("Calling Ollama API (Model: {}) with prompt: {}", modelName, prompt.substring(0, Math.min(prompt.length(), 100)) + "...");
+        try {
+            // Build the Ollama API request body
+            Map<String, Object> requestBody = new HashMap<>();
+            requestBody.put("model", modelName);
+            requestBody.put("prompt", prompt);
+            requestBody.put("stream", false);
+            
+            Map<String, Object> options = new HashMap<>();
+            options.put("temperature", 0.2); // low temperature for structured data
+            requestBody.put("options", options);
+
+            String responseJson = webClientBuilder.build()
+                    .post()
+                    .uri(apiUrl)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(requestBody)
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block(); // synchronous call
+
+            JsonNode rootNode = objectMapper.readTree(responseJson);
+            JsonNode responseNode = rootNode.path("response");
+            if (responseNode.isTextual()) {
+                return responseNode.asText();
             }
-
-            try {
-                log.info("Calling Gemini API with prompt: {}", prompt.substring(0, Math.min(prompt.length(), 100)) + "...");
-                
-                // Build the standard Gemini API request body
-                Map<String, Object> requestBody = new HashMap<>();
-                Map<String, Object> part = new HashMap<>();
-                part.put("text", prompt);
-                Map<String, Object> content = new HashMap<>();
-                content.put("parts", Collections.singletonList(part));
-                requestBody.put("contents", Collections.singletonList(content));
-                
-                Map<String, Object> genConfig = new HashMap<>();
-                genConfig.put("temperature", 0.2); // low temperature for structured data
-                genConfig.put("maxOutputTokens", 2048);
-                requestBody.put("generationConfig", genConfig);
-
-                int maxAttempts = 3;
-                long delayMs = 5000;
-
-                for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-                    try {
-                        String responseJson = webClientBuilder.build()
-                                .post()
-                                .uri(apiUrl)
-                                .header("x-goog-api-key", apiKey)
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .bodyValue(requestBody)
-                                .retrieve()
-                                .bodyToMono(String.class)
-                                .block(); // synchronous call
-
-                        JsonNode rootNode = objectMapper.readTree(responseJson);
-                        JsonNode candidatesNode = rootNode.path("candidates");
-                        if (candidatesNode.isArray() && candidatesNode.size() > 0) {
-                            JsonNode textNode = candidatesNode.get(0)
-                                    .path("content")
-                                    .path("parts")
-                                    .get(0)
-                                    .path("text");
-                            return textNode.asText();
-                        }
-                        throw new RuntimeException("Empty response candidates from Gemini API");
-                    } catch (WebClientResponseException e) {
-                        log.error("WebClient error calling Gemini API (attempt {}/{}): {} - {}", attempt, maxAttempts, e.getStatusCode(), e.getMessage());
-                        if (e.getStatusCode().value() == 429 && attempt < maxAttempts) {
-                            log.warn("Rate limit hit (429), retrying in {} ms...", delayMs);
-                            try {
-                                Thread.sleep(delayMs);
-                            } catch (InterruptedException ie) {
-                                Thread.currentThread().interrupt();
-                                throw new RuntimeException("API call interrupted during rate limit wait", ie);
-                            }
-                            delayMs *= 2;
-                        } else {
-                            throw new RuntimeException("Failed to call Gemini AI: " + e.getMessage(), e);
-                        }
-                    } catch (Exception e) {
-                        log.error("Error calling Gemini API (attempt {}/{}): {}", attempt, maxAttempts, e.getMessage(), e);
-                        if (attempt == maxAttempts) {
-                            throw new RuntimeException("Failed to call Gemini AI: " + e.getMessage(), e);
-                        }
-                        try {
-                            Thread.sleep(1000);
-                        } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt();
-                            throw new RuntimeException("API call interrupted", ie);
-                        }
-                    }
-                }
-                throw new RuntimeException("Failed to call Gemini AI: Max attempts reached");
-            } finally {
-                lastCallTimestamp = System.currentTimeMillis();
-            }
+            throw new RuntimeException("Unexpected response format from Ollama API");
+        } catch (Exception e) {
+            log.error("Error calling Ollama API: {}", e.getMessage(), e);
+            throw new RuntimeException("Failed to call Ollama AI: " + e.getMessage());
         }
     }
 
@@ -258,6 +205,7 @@ public class GeminiService {
         }
 
         String prompt = "Generate a short motivational morning briefing for a student/professional. " +
+                "Current date: " + java.time.LocalDate.now() + ". " +
                 "Tasks due today: " + taskSummary + ". Past completion rate: " + rate + "%. " +
                 "Be concise, energetic, and specific. Max 3 sentences.";
 
@@ -272,6 +220,7 @@ public class GeminiService {
     // 5. analyzeHabits
     public String analyzeHabits(String habitJson) {
         String prompt = "Analyze these habit completion patterns and give 3 specific, actionable insights. " +
+                "Current date: " + java.time.LocalDate.now() + ". " +
                 "Habits data: " + habitJson + ". " +
                 "Return insights as a numbered markdown list (1, 2, 3), max 2 lines per insight.";
 
@@ -289,6 +238,7 @@ public class GeminiService {
     // 6. chatWithAI
     public String chatWithAI(String message, String context) {
         String prompt = "You are a productivity coach AI. Be concise and actionable. " +
+                "Current date/time: " + java.time.LocalDateTime.now() + "\n" +
                 "User's current tasks and habits context: " + context + "\n" +
                 "User message: " + message + "\n" +
                 "Reply in max 3 sentences. Be direct.";
