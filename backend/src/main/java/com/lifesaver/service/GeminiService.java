@@ -139,7 +139,7 @@ public class GeminiService {
 
         String prompt = "Create an optimal time-blocked schedule for today based on these tasks. " +
                 "Consider deadlines and priorities. Return a clean, formatted schedule in readable markdown " +
-                "with emojis, indicating time blocks (e.g. 09:00 AM - 10:30 AM: task description). " +
+                "with emojis, indicating time blocks (e.g. 09:00 AM - 10:30 AM : task description). " +
                 "Tasks:\n" + taskSummary + "\n" +
                 "Current time: " + LocalDateTime.now();
 
